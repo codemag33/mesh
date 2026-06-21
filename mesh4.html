@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>P2P Chat</title>
+
+<script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gun/sea.js"></script>
+
+<style>
+body{
+  margin:0;
+  background:#111;
+  color:#fff;
+  font-family:sans-serif;
+  height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+.top{
+  display:flex;
+  gap:8px;
+  padding:10px;
+}
+input{
+  flex:1;
+  padding:12px;
+  border-radius:10px;
+  border:none;
+}
+button{
+  padding:12px;
+}
+#chat{
+  flex:1;
+  overflow:auto;
+  padding:10px;
+}
+.msg{
+  margin:6px 0;
+  padding:10px;
+  background:#222;
+  border-radius:10px;
+}
+.bottom{
+  display:flex;
+  gap:8px;
+  padding:10px;
+}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <input id="room" placeholder="Название комнаты">
+  <button onclick="join()">Войти</button>
+</div>
+
+<div id="chat"></div>
+
+<div class="bottom">
+  <input id="text" placeholder="Сообщение">
+  <button onclick="send()">Отправить</button>
+</div>
+
+<script>
+
+const gun = Gun([
+  "https://gun.eco/gun"
+]);
+
+const nick =
+  "user_" + Math.random().toString(36).slice(2,7);
+
+let roomNode = null;
+let loaded = {};
+
+function join(){
+
+  const room =
+    document.getElementById("room").value.trim();
+
+  if(!room){
+    alert("Введите комнату");
+    return;
+  }
+
+  document.getElementById("chat").innerHTML="";
+  loaded={};
+
+  roomNode = gun.get("chatrooms").get(room);
+
+  roomNode.map().on((msg,id)=>{
+
+    if(!msg || !msg.text) return;
+    if(loaded[id]) return;
+
+    loaded[id]=true;
+
+    const div=document.createElement("div");
+    div.className="msg";
+
+    const time =
+      new Date(msg.time).toLocaleTimeString();
+
+    div.innerHTML=
+      "<b>"+msg.user+
+      "</b><br>"+msg.text+
+      "<br><small>"+time+"</small>";
+
+    document.getElementById("chat")
+      .appendChild(div);
+
+    document.getElementById("chat")
+      .scrollTop =
+      document.getElementById("chat")
+      .scrollHeight;
+  });
+
+  alert("Подключено к комнате: "+room);
+}
+
+function send(){
+
+  if(!roomNode){
+    alert("Сначала войдите в комнату");
+    return;
+  }
+
+  const text =
+    document.getElementById("text").value.trim();
+
+  if(!text) return;
+
+  roomNode.set({
+    user:nick,
+    text:text,
+    time:Date.now()
+  });
+
+  document.getElementById("text").value="";
+}
+
+document
+.getElementById("text")
+.addEventListener("keydown",e=>{
+  if(e.key==="Enter") send();
+});
+
+</script>
+
+</body>
+</html>
