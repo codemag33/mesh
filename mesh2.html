@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#0a0e17"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="MESH"/>
+<title>MESH — P2P Chat</title>
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230a0e17'/%3E%3Ctext x='256' y='320' text-anchor='middle' font-family='monospace' font-size='200' font-weight='bold' fill='%2300e5ff'%3EM%3C/text%3E%3C/svg%3E"/>
+<script>
+const manifest={name:"MESH — P2P Chat",short_name:"MESH",start_url:"./mesh-chat.html",display:"standalone",background_color:"#0a0e17",theme_color:"#0a0e17",icons:[{src:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230a0e17'/%3E%3Ctext x='256' y='320' text-anchor='middle' font-family='monospace' font-size='200' font-weight='bold' fill='%2300e5ff'%3EM%3C/text%3E%3C/svg%3E",sizes:"512x512",type:"image/svg+xml"}]};
+const mb=new Blob([JSON.stringify(manifest)],{type:"application/json"});
+const ml=document.createElement('link');ml.rel='manifest';ml.href=URL.createObjectURL(mb);document.head.appendChild(ml);
+const swCode=`self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));self.addEventListener('fetch',e=>e.respondWith(fetch(e.request).catch(()=>caches.match(e.request))));`;
+if('serviceWorker' in navigator){const b=new Blob([swCode],{type:'text/javascript'});navigator.serviceWorker.register(URL.createObjectURL(b),{scope:'./'});}
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;height:100dvh}
+body{background:#0a0e17;color:#e2e8f0;font-family:'Inter',sans-serif;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#1e2d45;border-radius:2px}
+</style>
+</head>
+<body><div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script type="text/babel">
+const {useState,useEffect,useRef}=React;
+
+// ══════════════════════════════════════════
+// CRYPTO — secp256k1 + schnorr (no libs)
+// ══════════════════════════════════════════
+async function sha256(data){
+  const b=typeof data==='string'?new TextEncoder().encode(data):data;
+  return new Uint8Array(await crypto.subtle.digest('SHA-256',b));
+}
+const toHex=b=>Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join('');
+const fromHex=h=>{const a=new Uint8Array(h.length/2);for(let i=0;i<h.length;i+=2)a[i/2]=parseInt(h.slice(i,i+2),16);return a;};
+const P=0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2Fn;
+const N=0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
+const Gx=0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798n;
+const Gy=0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8n;
+const mod=(a,b=P)=>((a%b)+b)%b;
+const pow=(b,e,m)=>{let r=1n;b%=m;while(e>0n){if(e&1n)r=r*b%m;b=b*b%m;e>>=1n;}return r;};
+class Pt{
+  constructor(x,y){this.x=x;this.y=y;}
+  static Z=new Pt(0n,0n);
+  add(o){
+    if(this===Pt.Z)return o;if(o===Pt.Z)return this;
+    if(this.x===o.x){if(this.y!==o.y)return Pt.Z;const l=mod(3n*this.x*this.x*pow(2n*this.y,P-2n,P));const x3=mod(l*l-2n*this.x);return new Pt(x3,mod(l*(this.x-x3)-this.y));}
+    const l=mod((o.y-this.y)*pow(o.x-this.x,P-2n,P));const x3=mod(l*l-this.x-o.x);return new Pt(x3,mod(l*(this.x-x3)-this.y));
+  }
+  mul(s){let r=Pt.Z,p=this;s=mod(s,N);while(s>0n){if(s&1n)r=r.add(p);p=p.add(p);s>>=1n;}return r;}
+}
+const G=new Pt(Gx,Gy);
+const bi=b=>{let n=0n;for(const x of b)n=(n<<8n)|BigInt(x);return n;};
+const b32=n=>{const a=new Uint8Array(32);for(let i=31;i>=0;i--){a[i]=Number(n&0xffn);n>>=8n;}return a;};
+
+async function genKeypair(){
+  const pb=crypto.getRandomValues(new Uint8Array(32));
+  pb[0]&=0x7f;
+  const priv=bi(pb);
+  const pub=G.mul(priv);
+  return{priv:toHex(pb),pubkey:toHex(b32(pub.x))};
+}
+async function schnorrSign(msgHash,privHex){
+  const pb=fromHex(privHex);let priv=bi(pb);
+  const Pp=G.mul(priv);if(Pp.y%2n!==0n)priv=N-priv;
+  const cc=new Uint8Array(64);cc.set(pb,0);cc.set(msgHash,32);
+  let k=mod(bi(await sha256(cc)),N);if(k===0n)k=1n;
+  const R=G.mul(k);if(R.y%2n!==0n)k=N-k;
+  const rb=b32(R.x),ppb=b32(Pp.x);
+  const ei=new Uint8Array(96);ei.set(rb,0);ei.set(ppb,32);ei.set(msgHash,64);
+  const e=mod(bi(await sha256(ei)),N);const s=mod(k+e*priv,N);
+  const sig=new Uint8Array(64);sig.set(rb,0);sig.set(b32(s),32);
+  return toHex(sig);
+}
+async function buildEvent(kind,content,tags,privHex,pubkey){
+  const created_at=Math.floor(Date.now()/1000);
+  const arr=[0,pubkey,created_at,kind,tags,content];
+  const idBytes=await sha256(JSON.stringify(arr));
+  const id=toHex(idBytes);
+  const sig=await schnorrSign(idBytes,privHex);
+  return{id,pubkey,created_at,kind,tags,content,sig};
+}
+
+// ══════════════════════════════════════════
+// RELAY POOL — с логами для отладки
+// ══════════════════════════════════════════
+// Kind 1 = обычный пост — поддерживается ВСЕМИ релеями
+// Тема = пост с тегом #meshchat и subject
+// Ответ = пост с тегом e (reply) + #meshchat
+const RELAYS=[
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.nostr.band",
+  "wss://nostr.mom",
+  "wss://offchain.pub",
+];
+const HASHTAG="meshchat";
+
+class RelayPool{
+  constructor(urls,onEvent,onStatus,onLog){
+    this.urls=urls;this.onEvent=onEvent;this.onStatus=onStatus;this.onLog=onLog;
+    this.sockets={};this.statuses={};this.subs={};
+    for(const u of urls){this.statuses[u]="…";this._open(u);}
+  }
+  _open(url){
+    try{
+      const ws=new WebSocket(url);this.sockets[url]=ws;
+      ws.onopen=()=>{
+        this.statuses[url]="✓";this.onStatus({...this.statuses});
+        this.onLog(`connected: ${url}`);
+        for(const[id,f]of Object.entries(this.subs))ws.send(JSON.stringify(["REQ",id,f]));
+      };
+      ws.onclose=(e)=>{
+        this.statuses[url]="✗";this.onStatus({...this.statuses});
+        this.onLog(`closed: ${url} code=${e.code}`);
+        setTimeout(()=>this._open(url),8000);
+      };
+      ws.onerror=()=>{this.statuses[url]="✗";this.onStatus({...this.statuses});this.onLog(`error: ${url}`);};
+      ws.onmessage=e=>{
+        try{
+          const m=JSON.parse(e.data);
+          if(m[0]==="EVENT"){this.onEvent(m[2]);this.onLog(`event kind=${m[2].kind} from ${url.replace('wss://','').split('.')[0]}`);}
+          else if(m[0]==="NOTICE")this.onLog(`notice: ${m[1]}`);
+        }catch{}
+      };
+    }catch(e){this.onLog(`open error: ${url} ${e.message}`);}
+  }
+  subscribe(id,filter){
+    this.subs[id]=filter;
+    for(const ws of Object.values(this.sockets))
+      if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(["REQ",id,filter]));
+  }
+  publish(ev){
+    const m=JSON.stringify(["EVENT",ev]);let sent=0;
+    for(const[url,ws]of Object.entries(this.sockets)){
+      if(ws.readyState===WebSocket.OPEN){ws.send(m);sent++;this.onLog(`published to ${url.replace('wss://','').split('.')[0]}`);}
+    }
+    if(sent===0)this.onLog('WARNING: no open sockets to publish!');
+  }
+  close(){for(const ws of Object.values(this.sockets))ws.close();}
+}
+
+// ══════════════════════════════════════════
+// STYLES
+// ══════════════════════════════════════════
+const S=`
+.app{display:flex;flex-direction:column;height:100dvh;max-width:480px;margin:0 auto;background:#0a0e17;position:relative;overflow:hidden}
+.hdr{background:#111827;border-bottom:1px solid #1e2d45;padding:12px 16px;display:flex;align-items:center;gap:10px;padding-top:max(12px,env(safe-area-inset-top));flex-shrink:0}
+.htitle{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#00e5ff;letter-spacing:1px;flex:1}
+.back{background:none;border:none;color:#00e5ff;font-size:22px;cursor:pointer;padding:0 4px;line-height:1}
+.hkey{font-size:10px;color:#6b7a99;font-family:'JetBrains Mono',monospace;white-space:nowrap}
+.sbar{font-size:10px;font-family:'JetBrains Mono',monospace;padding:4px 10px;background:#0d1520;border-bottom:1px solid #1e2d45;color:#6b7a99;display:flex;gap:10px;align-items:center;flex-shrink:0;overflow-x:auto;white-space:nowrap}
+.rdot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:2px;flex-shrink:0}
+.ok{background:#10b981}.err,.x{background:#f43f5e}.connecting,.dots{background:#f59e0b;animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.threads{flex:1;overflow-y:auto;padding:8px 10px;display:flex;flex-direction:column;gap:8px}
+.tcard{background:#111827;border:1px solid #1e2d45;border-radius:14px;padding:14px;cursor:pointer;transition:border-color .15s;active:border-color:#004d5e}
+.tcard:active{border-color:#00e5ff;background:#131f33}
+.ttitle{font-size:14px;font-weight:600;margin-bottom:5px}
+.tmeta{font-size:11px;color:#6b7a99;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tcnt{background:#004d5e;color:#00e5ff;padding:1px 7px;border-radius:10px;font-size:10px;font-family:'JetBrains Mono',monospace}
+.chat{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:6px}
+.bwrap{display:flex;flex-direction:column}
+.bwrap.own{align-items:flex-end}
+.bubble{max-width:84%;padding:9px 13px;border-radius:16px;font-size:14px;line-height:1.5;word-break:break-word}
+.bubble.other{background:#1a2235;border:1px solid #1e2d45;border-bottom-left-radius:3px}
+.bubble.own{background:#0f4c75;border:1px solid rgba(56,189,248,.2);border-bottom-right-radius:3px}
+.bauth{font-size:10px;color:#00e5ff;font-family:'JetBrains Mono',monospace;margin-bottom:2px;padding-left:2px}
+.bauth.own{color:#38bdf8;text-align:right;padding-right:2px}
+.btime{font-size:10px;color:#374151;margin-top:3px;padding:0 2px}
+.iarea{background:#111827;border-top:1px solid #1e2d45;padding:10px 12px;display:flex;gap:8px;align-items:flex-end;flex-shrink:0;padding-bottom:max(10px,env(safe-area-inset-bottom))}
+.ibox{flex:1;background:#1a2235;border:1px solid #1e2d45;border-radius:12px;padding:10px 13px;color:#e2e8f0;font-size:15px;font-family:'Inter',sans-serif;resize:none;min-height:44px;max-height:110px;outline:none;transition:border-color .2s;line-height:1.4;-webkit-appearance:none}
+.ibox:focus{border-color:#00e5ff}.ibox::placeholder{color:#4a5568}
+.sbtn{background:#00e5ff;color:#0a0e17;border:none;border-radius:10px;width:44px;height:44px;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-weight:700}
+.sbtn:disabled{opacity:.35}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#6b7a99;font-size:13px;text-align:center;padding:24px}
+.eico{font-size:44px;opacity:.35}
+.setup{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;padding-top:max(24px,env(safe-area-inset-top))}
+.logo{font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:700;color:#00e5ff;text-shadow:0 0 28px #00e5ff;letter-spacing:6px}
+.sub{font-size:13px;color:#6b7a99;text-align:center;line-height:1.7}
+.scard{background:#111827;border:1px solid #1e2d45;border-radius:16px;padding:20px;width:100%}
+.scard label{font-size:11px;color:#6b7a99;font-family:'JetBrains Mono',monospace;display:block;margin-bottom:8px;letter-spacing:.5px}
+.scard input{width:100%;background:#1a2235;border:1px solid #1e2d45;border-radius:10px;padding:13px 14px;color:#e2e8f0;font-size:16px;outline:none;margin-bottom:14px;-webkit-appearance:none;font-family:'Inter',sans-serif}
+.scard input:focus{border-color:#00e5ff}
+.stbtn{width:100%;background:#00e5ff;color:#0a0e17;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif}
+.stbtn:disabled{opacity:.4}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:flex-end;justify-content:center;z-index:100;padding-bottom:env(safe-area-inset-bottom)}
+.modal{background:#111827;border:1px solid #1e2d45;border-radius:20px 20px 0 0;padding:20px;width:100%;max-width:480px}
+.modal h3{font-size:16px;font-weight:600;margin-bottom:14px;text-align:center}
+.modal input,.modal textarea{width:100%;background:#1a2235;border:1px solid #1e2d45;border-radius:10px;padding:12px 14px;color:#e2e8f0;font-size:15px;outline:none;margin-bottom:10px;-webkit-appearance:none;resize:none;font-family:'Inter',sans-serif}
+.modal input:focus,.modal textarea:focus{border-color:#00e5ff}
+.mbtns{display:flex;gap:8px;margin-top:4px}
+.mcancel{flex:1;background:none;border:1px solid #1e2d45;color:#6b7a99;border-radius:10px;padding:13px;cursor:pointer;font-size:14px}
+.mok{flex:1;background:#00e5ff;color:#0a0e17;border:none;border-radius:10px;padding:13px;font-weight:600;cursor:pointer;font-size:14px}
+.mok:disabled{opacity:.4}
+.fab{position:absolute;bottom:74px;right:14px;background:#00e5ff;color:#0a0e17;border:none;border-radius:50%;width:54px;height:54px;font-size:26px;cursor:pointer;box-shadow:0 4px 22px rgba(0,229,255,.45);display:flex;align-items:center;justify-content:center;font-weight:700;z-index:50}
+.log-panel{background:#060b14;border-top:1px solid #1e2d45;padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#374151;max-height:90px;overflow-y:auto;flex-shrink:0}
+.log-line{color:#4b5563;line-height:1.4}
+.log-line.hi{color:#00e5ff}
+.pwa{padding:6px 12px;background:#0d1520;border-bottom:1px solid #1e2d45;flex-shrink:0}
+.pwa-inner{background:#0f2744;border:1px solid #004d5e;border-radius:8px;padding:8px 12px;font-size:11px;color:#00e5ff;text-align:center;line-height:1.5;cursor:pointer}
+`;
+
+// ══════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════
+const shortKey=h=>h.slice(0,6)+'…'+h.slice(-4);
+const fmtTime=ts=>new Date(ts*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+const STORAGE_KEY='mesh_id_v2';
+
+// ══════════════════════════════════════════
+// APP
+// ══════════════════════════════════════════
+function App(){
+  const [screen,setScreen]=useState('setup');
+  const [nick,setNick]=useState('');
+  const [kp,setKp]=useState(null);
+  const [threads,setThreads]=useState({});  // id->{id,title,about,pubkey,created_at}
+  const [msgs,setMsgs]=useState({});        // threadId->[events]
+  const [active,setActive]=useState(null);
+  const [tab,setTab]=useState('threads');
+  const [input,setInput]=useState('');
+  const [relayStatus,setRelayStatus]=useState({});
+  const [sending,setSending]=useState(false);
+  const [showNew,setShowNew]=useState(false);
+  const [newTitle,setNewTitle]=useState('');
+  const [newBody,setNewBody]=useState('');
+  const [logs,setLogs]=useState([]);
+  const [showLog,setShowLog]=useState(false);
+  const [showPwa,setShowPwa]=useState(false);
+  const poolRef=useRef(null);
+  const chatEndRef=useRef(null);
+  const seenRef=useRef(new Set());
+  const isIOS=/iPhone|iPad|iPod/.test(navigator.userAgent);
+  const isAndroid=/Android/.test(navigator.userAgent);
+  const isStandalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone;
+
+  const addLog=msg=>setLogs(p=>[...p.slice(-49),{t:fmtTime(Date.now()/1000),msg,hi:msg.startsWith('event')||msg.startsWith('published')}]);
+
+  // Load saved identity
+  useEffect(()=>{
+    try{
+      const s=localStorage.getItem(STORAGE_KEY);
+      if(s){const d=JSON.parse(s);setNick(d.nick);setKp(d.kp);setShowPwa(!isStandalone);setScreen('main');}
+    }catch{}
+  },[]);
+
+  async function handleStart(){
+    if(!nick.trim())return;
+    const keypair=await genKeypair();
+    setKp(keypair);
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({nick:nick.trim(),kp:keypair}));}catch{}
+    setShowPwa(!isStandalone);
+    setScreen('main');
+  }
+
+  useEffect(()=>{
+    if(screen!=='main'||!kp)return;
+    addLog('starting relay pool…');
+    const pool=new RelayPool(RELAYS,handleEvent,setRelayStatus,addLog);
+    poolRef.current=pool;
+    // Подписка на kind:1 с хэштегом meshchat — поддерживается ВСЕМИ релеями
+    const filter={kinds:[1],'#t':[HASHTAG],limit:100};
+    pool.subscribe('mesh',filter);
+    addLog(`subscribed: kinds=[1] #t=[${HASHTAG}]`);
+    return()=>pool.close();
+  },[screen,kp]);
+
+  function handleEvent(ev){
+    if(!ev?.id)return;
+    if(seenRef.current.has(ev.id))return;
+    seenRef.current.add(ev.id);
+
+    const tags=ev.tags||[];
+    const isReply=tags.some(t=>t[0]==='e');
+    const subjectTag=tags.find(t=>t[0]==='subject');
+
+    if(!isReply&&subjectTag){
+      // Это тема (пост с subject и без e-тега)
+      setThreads(p=>({...p,[ev.id]:{
+        id:ev.id,
+        title:subjectTag[1]||'Без названия',
+        about:ev.content||'',
+        pubkey:ev.pubkey,
+        created_at:ev.created_at
+      }}));
+    } else if(isReply){
+      // Это ответ — найти корневой e-тег
+      const rootTag=tags.find(t=>t[0]==='e'&&t[3]==='root')||tags.find(t=>t[0]==='e');
+      if(!rootTag)return;
+      const tid=rootTag[1];
+      setMsgs(p=>{
+        const ex=p[tid]||[];
+        if(ex.find(m=>m.id===ev.id))return p;
+        return{...p,[tid]:[...ex,ev].sort((a,b)=>a.created_at-b.created_at)};
+      });
+    }
+  }
+
+  useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth'});},[msgs,active]);
+
+  async function publishThread(){
+    if(!newTitle.trim()||!kp)return;
+    setSending(true);
+    try{
+      const tags=[
+        ['t',HASHTAG],
+        ['subject',newTitle.trim()],
+      ];
+      const ev=await buildEvent(1,newBody.trim()||newTitle.trim(),tags,kp.priv,kp.pubkey);
+      poolRef.current?.publish(ev);
+      handleEvent(ev);
+      setShowNew(false);setNewTitle('');setNewBody('');
+      setActive(ev.id);setTab('chat');
+    }catch(e){addLog('ERROR: '+e.message);}
+    setSending(false);
+  }
+
+  async function sendMsg(){
+    if(!input.trim()||!active||!kp)return;
+    const text=input.trim();
+    setSending(true);
+    try{
+      const tags=[
+        ['t',HASHTAG],
+        ['e',active,'','root'],
+        ['p',threads[active]?.pubkey||kp.pubkey],
+        ['subject','Re: '+(threads[active]?.title||'')],
+        ['nick',nick],
+      ];
+      const ev=await buildEvent(1,`${nick}: ${text}`,tags,kp.priv,kp.pubkey);
+      poolRef.current?.publish(ev);
+      handleEvent(ev);
+      setInput('');
+    }catch(e){addLog('ERROR: '+e.message);}
+    setSending(false);
+  }
+
+  // ── Status bar
+  const StatusBar=()=>(
+    <div className="sbar" onClick={()=>setShowLog(p=>!p)}>
+      {RELAYS.map(url=>{
+        const s=relayStatus[url]||'…';
+        const name=url.replace('wss://','').split('.')[0];
+        const cls=s==='✓'?'ok':s==='✗'?'err':'connecting';
+        return <span key={url}><span className={`rdot ${cls}`}/>{name}</span>;
+      })}
+      <span style={{marginLeft:'auto',opacity:.5}}>{showLog?'▲':'▼'}лог</span>
+    </div>
+  );
+
+  // ── PWA hint
+  const PwaHint=()=>{
+    if(!showPwa)return null;
+    const h=isIOS?'📲 iOS: Share → «На экран Домой»':isAndroid?'📲 Android: меню ⋮ → «Добавить на гл. экран»':'📲 Можно установить как приложение';
+    return(
+      <div className="pwa">
+        <div className="pwa-inner" onClick={()=>setShowPwa(false)}>{h} &nbsp; ✕</div>
+      </div>
+    );
+  };
+
+  // ── Setup screen
+  if(screen==='setup')return(
+    <>
+    <style>{S}</style>
+    <div className="app">
+      <div className="setup">
+        <div className="logo">MESH</div>
+        <div className="sub">P2P мессенджер без серверов<br/>Nostr · Kind:1 · #{HASHTAG}<br/>Без регистрации — только криптография</div>
+        <div className="scard">
+          <label>ТВОЙ НИКНЕЙМ</label>
+          <input value={nick} onChange={e=>setNick(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleStart()} placeholder="Введи имя…" maxLength={20} autoFocus/>
+          <button className="stbtn" onClick={handleStart} disabled={!nick.trim()}>Войти в сеть →</button>
+        </div>
+        <div style={{fontSize:11,color:'#374151',textAlign:'center',lineHeight:1.7}}>
+          Ключи сохраняются на этом устройстве<br/>Имя отображается всем участникам
+        </div>
+      </div>
+    </div>
+    </>
+  );
+
+  // ── Main screen
+  const threadList=Object.values(threads).sort((a,b)=>b.created_at-a.created_at);
+  const activeMsgs=active?(msgs[active]||[]):[];
+  const anyOk=Object.values(relayStatus).some(s=>s==='✓');
+
+  return(
+    <>
+    <style>{S}</style>
+    <div className="app">
+      {/* Header */}
+      <div className="hdr">
+        {tab==='chat'&&active
+          ?<button className="back" onClick={()=>{setTab('threads');setActive(null);}}>←</button>
+          :<div style={{width:8,height:8,borderRadius:'50%',background:anyOk?'#00e5ff':'#f59e0b',boxShadow:anyOk?'0 0 8px #00e5ff':'none',animation:anyOk?'pulse 2s infinite':'blink 1s infinite',flexShrink:0}}/>
+        }
+        <div className="htitle">
+          {tab==='chat'&&active?(threads[active]?.title||'Чат'):'MESH'}
+        </div>
+        <div className="hkey">{nick} · {shortKey(kp.pubkey)}</div>
+      </div>
+
+      <StatusBar/>
+      {showLog&&(
+        <div className="log-panel">
+          {logs.length===0?<div className="log-line">нет событий…</div>
+            :logs.map((l,i)=><div key={i} className={`log-line ${l.hi?'hi':''}`}>[{l.t}] {l.msg}</div>)}
+        </div>
+      )}
+      <PwaHint/>
+
+      {/* Threads */}
+      {tab==='threads'&&<>
+        <div className="threads">
+          {threadList.length===0?(
+            <div className="empty">
+              <div className="eico">📡</div>
+              <div style={{fontWeight:600}}>Подключаемся…</div>
+              <div style={{fontSize:11,lineHeight:1.7}}>Как только релей ответит,<br/>темы появятся здесь.<br/>Или создай первую — кнопка ＋</div>
+              <div style={{fontSize:10,color:'#374151',marginTop:4}}>Нажми «▼лог» выше чтобы видеть статус</div>
+            </div>
+          ):threadList.map(t=>(
+            <div key={t.id} className="tcard" onClick={()=>{setActive(t.id);setTab('chat');}}>
+              <div className="ttitle">{t.title}</div>
+              {t.about&&t.about!==t.title&&<div style={{fontSize:12,color:'#6b7a99',margin:'3px 0 6px',lineHeight:1.4}}>{t.about.slice(0,100)}</div>}
+              <div className="tmeta">
+                <span>{shortKey(t.pubkey)}</span>
+                <span>·</span>
+                <span>{fmtTime(t.created_at)}</span>
+                {(msgs[t.id]?.length||0)>0&&<span className="tcnt">💬 {msgs[t.id].length}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <button className="fab" onClick={()=>setShowNew(true)}>＋</button>
+      </>}
+
+      {/* Chat */}
+      {tab==='chat'&&<>
+        <div className="chat">
+          {activeMsgs.length===0?(
+            <div className="empty">
+              <div className="eico">💬</div>
+              <div>Нет сообщений.<br/>Напиши первым!</div>
+            </div>
+          ):activeMsgs.map(msg=>{
+            const isOwn=msg.pubkey===kp.pubkey;
+            const ci=msg.content.indexOf(': ');
+            const author=ci>0?msg.content.slice(0,ci):shortKey(msg.pubkey);
+            const body=ci>0?msg.content.slice(ci+2):msg.content;
+            return(
+              <div key={msg.id} className={`bwrap ${isOwn?'own':''}`}>
+                <div className={`bauth ${isOwn?'own':''}`}>{author}</div>
+                <div className={`bubble ${isOwn?'own':'other'}`}>{body}</div>
+                <div className="btime">{fmtTime(msg.created_at)}</div>
+              </div>
+            );
+          })}
+          <div ref={chatEndRef}/>
+        </div>
+        <div className="iarea">
+          <textarea className="ibox" value={input} onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!isIOS&&!isAndroid){e.preventDefault();sendMsg();}}}
+            placeholder="Сообщение…" rows={1}/>
+          <button className="sbtn" onClick={sendMsg} disabled={sending||!input.trim()}>↑</button>
+        </div>
+      </>}
+
+      {/* New thread modal */}
+      {showNew&&(
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowNew(false)}>
+          <div className="modal">
+            <h3>Новая тема</h3>
+            <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="Заголовок темы…" maxLength={80} autoFocus/>
+            <textarea value={newBody} onChange={e=>setNewBody(e.target.value)} placeholder="Текст (необязательно)…" rows={3}/>
+            <div className="mbtns">
+              <button className="mcancel" onClick={()=>setShowNew(false)}>Отмена</button>
+              <button className="mok" onClick={publishThread} disabled={sending||!newTitle.trim()}>{sending?'…':'Опубликовать'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
